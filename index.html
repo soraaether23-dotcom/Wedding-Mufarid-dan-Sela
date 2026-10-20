@@ -1776,9 +1776,8 @@ html, body { background:var(--mahogany); }
 (() => {
   'use strict';
   // URL Web App Google Apps Script yang sudah berhasil diuji.
-  const COMMENTS_API_URL = 'https://script.google.com/macros/s/AKfycbzTats8xhA-R6Oe6XajfpbhfFxLucvdYDUnw0kSnFCYpacEGckidy4N4VtbutPe5Fzn/exec';
-  // Menggunakan nama callback tetap yang sama dengan tes endpoint testCallback(...).
-  const CALLBACK_NAME = 'testCallback';
+  const COMMENTS_API_URL = 'https://script.google.com/a/*/macros/s/AKfycbzTats8xhA-R6Oe6XajfpbhfFxLucvdYDUnw0kSnFCYpacEGckidy4N4VtbutPe5Fzn/exec';
+  // Nama callback dibuat unik setiap permintaan agar tidak bentrok dengan skrip lain.
   const form = document.getElementById('public-comment-form');
   const nameInput = document.getElementById('public-comment-name');
   const messageInput = document.getElementById('public-comment-message');
@@ -1789,7 +1788,7 @@ html, body { background:var(--mahogany); }
   const refresh = document.getElementById('public-comments-refresh');
   if (!form || !list || !status) return;
 
-  const configured = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:$|\?)/.test(COMMENTS_API_URL);
+  const configured = /^https:\/\/script\.google\.com\/(?:a\/[^/]+\/)?macros\/s\/[^/]+\/exec(?:$|\?)/.test(COMMENTS_API_URL);
   const setStatus = (message, kind = '') => {
     status.textContent = message;
     status.classList.remove('is-error', 'is-success');
@@ -1841,14 +1840,15 @@ html, body { background:var(--mahogany); }
     setStatus('Memuat ucapan para tamu…');
     const script = document.createElement('script');
     activeScript = script;
+    const callbackName = '__mfsComments_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
     let finished = false;
     const finish = () => {
       if (finished) return;
       finished = true;
       cleanListRequest();
-      try { delete window[CALLBACK_NAME]; } catch (_) { window[CALLBACK_NAME] = undefined; }
+      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
     };
-    window[CALLBACK_NAME] = (payload) => {
+    window[callbackName] = (payload) => {
       if (finished) return;
       finish();
       if (!payload || payload.ok !== true || !Array.isArray(payload.comments)) {
@@ -1859,13 +1859,13 @@ html, body { background:var(--mahogany); }
       setStatus('Ucapan berhasil dimuat. Semua tamu dapat melihat daftar yang sama.', 'is-success');
     };
     script.async = true;
-    script.referrerPolicy = 'no-referrer';
+    // Biarkan browser memakai kebijakan referrer HTTPS default.
     script.onerror = () => {
       if (finished) return;
       finish();
       setStatus('Browser gagal memuat skrip dari Google Apps Script. Periksa koneksi, lalu tekan Muat Ulang. Jika berulang, pastikan halaman ini memakai file index.html terbaru.', 'is-error');
     };
-    script.src = COMMENTS_API_URL + '?action=list&callback=' + CALLBACK_NAME + '&_=' + Date.now();
+    script.src = COMMENTS_API_URL + '?action=list&callback=' + encodeURIComponent(callbackName) + '&_=' + Date.now();
     document.head.appendChild(script);
     requestTimer = window.setTimeout(() => {
       if (finished) return;
