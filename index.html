@@ -1775,8 +1775,10 @@ html, body { background:var(--mahogany); }
 <script id="public-comment-book-script">
 (() => {
   'use strict';
-  // Paste the deployed Google Apps Script Web App URL here (ends in /exec).
+  // URL Web App Google Apps Script yang sudah berhasil diuji.
   const COMMENTS_API_URL = 'https://script.google.com/macros/s/AKfycbzds2iQexrOTq-cAP1EBTcHgRV6x7HsXvIeF9T-LujI73RdK-4-JoYNmHkFBnHlhFjW/exec';
+  // Menggunakan nama callback tetap yang sama dengan tes endpoint testCallback(...).
+  const CALLBACK_NAME = 'testCallback';
   const form = document.getElementById('public-comment-form');
   const nameInput = document.getElementById('public-comment-name');
   const messageInput = document.getElementById('public-comment-message');
@@ -1786,8 +1788,13 @@ html, body { background:var(--mahogany); }
   const list = document.getElementById('public-comments-list');
   const refresh = document.getElementById('public-comments-refresh');
   if (!form || !list || !status) return;
+
   const configured = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:$|\?)/.test(COMMENTS_API_URL);
-  const setStatus = (message, kind = '') => { status.textContent = message; status.classList.remove('is-error','is-success'); if (kind) status.classList.add(kind); };
+  const setStatus = (message, kind = '') => {
+    status.textContent = message;
+    status.classList.remove('is-error', 'is-success');
+    if (kind) status.classList.add(kind);
+  };
   const safeText = (value, max) => String(value || '').trim().slice(0, max);
   const fmtDate = (value) => {
     const d = new Date(value);
@@ -1797,43 +1804,83 @@ html, body { background:var(--mahogany); }
   function renderComments(comments) {
     list.replaceChildren();
     if (!Array.isArray(comments) || comments.length === 0) {
-      const empty = document.createElement('p'); empty.className = 'public-comments-empty';
+      const empty = document.createElement('p');
+      empty.className = 'public-comments-empty';
       empty.textContent = 'Belum ada ucapan. Jadilah yang pertama meninggalkan doa untuk kedua mempelai.';
-      list.appendChild(empty); return;
+      list.appendChild(empty);
+      return;
     }
     comments.slice(0, 100).forEach((item) => {
       const card = document.createElement('article'); card.className = 'public-comment-card';
       const meta = document.createElement('div'); meta.className = 'public-comment-meta';
       const author = document.createElement('strong'); author.className = 'public-comment-author'; author.textContent = safeText(item.name, 60) || 'Tamu Undangan';
-      const date = document.createElement('time'); date.textContent = fmtDate(item.timestamp); if (item.timestamp) date.dateTime = new Date(item.timestamp).toISOString();
+      const date = document.createElement('time'); date.textContent = fmtDate(item.timestamp);
+      if (item.timestamp) { const d = new Date(item.timestamp); if (!Number.isNaN(d.getTime())) date.dateTime = d.toISOString(); }
       meta.append(author, date);
       const message = document.createElement('p'); message.className = 'public-comment-text'; message.textContent = safeText(item.message, 500);
       card.append(meta, message); list.appendChild(card);
     });
   }
+
+  let activeScript = null;
+  let requestTimer = null;
+  let requestInProgress = false;
+  function cleanListRequest() {
+    if (requestTimer) { clearTimeout(requestTimer); requestTimer = null; }
+    if (activeScript) { activeScript.onerror = null; activeScript.onload = null; activeScript.remove(); activeScript = null; }
+    requestInProgress = false;
+  }
   function loadComments() {
     if (!configured) {
-      setStatus('Untuk mengaktifkan komentar publik, tempelkan URL Web App Google Apps Script ke konstanta COMMENTS_API_URL pada file HTML.', 'is-error');
+      setStatus('URL Web App komentar belum dikonfigurasi pada HTML.', 'is-error');
       return;
     }
+    // Hindari permintaan tumpang-tindih ketika halaman sedang memuat ucapan.
+    if (requestInProgress) return;
+    requestInProgress = true;
     setStatus('Memuat ucapan para tamu…');
-    const cb = 'publicCommentsCb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
     const script = document.createElement('script');
-    const cleanup = () => { try { delete window[cb]; } catch (_) { window[cb] = undefined; } script.remove(); };
-    const timer = window.setTimeout(() => { cleanup(); setStatus('Komentar belum dapat dimuat. Periksa koneksi atau URL Apps Script.', 'is-error'); }, 12000);
-    window[cb] = (payload) => {
-      clearTimeout(timer); cleanup();
-      if (!payload || payload.ok !== true) { setStatus('Komentar belum dapat dimuat. Periksa deployment Apps Script.', 'is-error'); return; }
-      renderComments(payload.comments || []);
-      setStatus('Komentar publik diperbarui. Semua tamu dapat melihat ucapan yang sama.', 'is-success');
+    activeScript = script;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cleanListRequest();
+      try { delete window[CALLBACK_NAME]; } catch (_) { window[CALLBACK_NAME] = undefined; }
     };
-    script.onerror = () => { clearTimeout(timer); cleanup(); setStatus('Gagal menghubungi layanan komentar. Pastikan URL Web App benar dan aksesnya tersedia untuk semua orang.', 'is-error'); };
-    script.src = COMMENTS_API_URL + (COMMENTS_API_URL.includes('?') ? '&' : '?') + 'action=list&callback=' + encodeURIComponent(cb) + '&_=' + Date.now();
+    window[CALLBACK_NAME] = (payload) => {
+      if (finished) return;
+      finish();
+      if (!payload || payload.ok !== true || !Array.isArray(payload.comments)) {
+        setStatus('Respons layanan komentar tidak sesuai. Periksa versi Web App Apps Script.', 'is-error');
+        return;
+      }
+      renderComments(payload.comments);
+      setStatus('Ucapan berhasil dimuat. Semua tamu dapat melihat daftar yang sama.', 'is-success');
+    };
+    script.async = true;
+    script.referrerPolicy = 'no-referrer';
+    script.onerror = () => {
+      if (finished) return;
+      finish();
+      setStatus('Browser gagal memuat skrip dari Google Apps Script. Periksa koneksi, lalu tekan Muat Ulang. Jika berulang, pastikan halaman ini memakai file index.html terbaru.', 'is-error');
+    };
+    script.src = COMMENTS_API_URL + '?action=list&callback=' + CALLBACK_NAME + '&_=' + Date.now();
     document.head.appendChild(script);
+    requestTimer = window.setTimeout(() => {
+      if (finished) return;
+      finish();
+      setStatus('Layanan komentar tidak memberikan respons dalam 12 detik. Tekan Muat Ulang untuk mencoba lagi.', 'is-error');
+    }, 12000);
   }
+
   const frameName = 'public-comment-post-frame';
   let hiddenFrame = document.getElementById(frameName);
-  if (!hiddenFrame) { hiddenFrame = document.createElement('iframe'); hiddenFrame.id = frameName; hiddenFrame.name = frameName; hiddenFrame.title = 'Pengiriman komentar'; hiddenFrame.hidden = true; hiddenFrame.setAttribute('aria-hidden','true'); document.body.appendChild(hiddenFrame); }
+  if (!hiddenFrame) {
+    hiddenFrame = document.createElement('iframe');
+    hiddenFrame.id = frameName; hiddenFrame.name = frameName; hiddenFrame.title = 'Pengiriman komentar'; hiddenFrame.hidden = true; hiddenFrame.setAttribute('aria-hidden','true');
+    document.body.appendChild(hiddenFrame);
+  }
   let waitingForPost = false;
   hiddenFrame.addEventListener('load', () => {
     if (!waitingForPost) return;
@@ -1846,7 +1893,7 @@ html, body { background:var(--mahogany); }
   });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!configured) { setStatus('Komentar publik belum aktif. Hubungkan URL Apps Script terlebih dahulu sesuai petunjuk dalam paket.', 'is-error'); return; }
+    if (!configured) { setStatus('Komentar publik belum aktif. Periksa URL Apps Script pada HTML.', 'is-error'); return; }
     if (honeypot && honeypot.value.trim()) return;
     const name = safeText(nameInput.value, 60);
     const message = safeText(messageInput.value, 500);
@@ -1858,11 +1905,13 @@ html, body { background:var(--mahogany); }
     const add = (key, value) => { const input = document.createElement('input'); input.type = 'hidden'; input.name = key; input.value = value; post.appendChild(input); };
     add('action','add'); add('name',name); add('message',message); add('website','');
     document.body.appendChild(post); waitingForPost = true; post.submit(); window.setTimeout(() => post.remove(), 5000);
-    window.setTimeout(() => { if (waitingForPost) { waitingForPost=false; submitButton.disabled=false; submitButton.textContent='Kirim Ucapan'; setStatus('Pengiriman belum terkonfirmasi. Muat ulang daftar komentar atau coba lagi.', 'is-error'); } }, 15000);
+    window.setTimeout(() => {
+      if (waitingForPost) { waitingForPost=false; submitButton.disabled=false; submitButton.textContent='Kirim Ucapan'; setStatus('Pengiriman belum terkonfirmasi. Muat ulang daftar komentar atau coba lagi.', 'is-error'); }
+    }, 15000);
   });
   refresh?.addEventListener('click', loadComments);
   if (!configured) {
-    setStatus('Komentar publik belum aktif. Paket undangan menyertakan file Apps Script dan panduan untuk menghubungkan Google Sheets.', 'is-error');
+    setStatus('Komentar publik belum aktif. Hubungkan URL Apps Script terlebih dahulu.', 'is-error');
     submitButton.disabled = true;
   } else loadComments();
 })();
